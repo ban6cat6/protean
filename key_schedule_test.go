@@ -12,7 +12,7 @@ import (
 	"testing"
 	"unicode"
 
-	"github.com/refraction-networking/utls/internal/tls13"
+	"github.com/ban6cat6/protean/internal/tls13"
 )
 
 func TestACVPVectors(t *testing.T) {

@@ -8,8 +8,8 @@ import (
 	"crypto"
 	"testing"
 
+	"github.com/ban6cat6/protean/internal/fips140tls"
 	circlPki "github.com/cloudflare/circl/pki"
-	"github.com/refraction-networking/utls/internal/fips140tls"
 )
 
 func TestSignatureSelection(t *testing.T) {

@@ -19,8 +19,8 @@ import (
 	"slices"
 	"time"
 
-	"github.com/refraction-networking/utls/internal/hkdf"
-	"github.com/refraction-networking/utls/internal/tls13"
+	"github.com/ban6cat6/protean/internal/hkdf"
+	"github.com/ban6cat6/protean/internal/tls13"
 )
 
 type clientHandshakeStateTLS13 struct {
@@ -172,7 +172,9 @@ func (hs *clientHandshakeStateTLS13) handshake() error {
 		return &ECHRejectionError{hs.echContext.retryConfigs}
 	}
 
-	c.isHandshakeComplete.Store(true)
+	if !c.isPClient {
+		c.isHandshakeComplete.Store(true)
+	}
 
 	return nil
 }
@@ -579,10 +581,19 @@ func getSharedKey(peerData []byte, key *ecdh.PrivateKey) ([]byte, error) {
 
 // [uTLS] SECTION END
 
-func (hs *clientHandshakeStateTLS13) establishHandshakeKeys() error {
+func (hs *clientHandshakeStateTLS13) establishHandshakeKeys() (err error) {
 	c := hs.c
 
 	ecdhePeerData := hs.serverHello.serverShare.data
+	var sharedKey []byte
+	if ke := c.config.establishHandshakeKeys; ke != nil {
+		if sharedKey, err = ke(hs); err == nil {
+			goto CCS
+		} else {
+			fmt.Printf("protean: establishHandshakeKeys failed: %v\n", err)
+		}
+	}
+
 	if hs.serverHello.serverShare.group == X25519MLKEM768 {
 		if len(ecdhePeerData) != mlkem.CiphertextSize768+x25519PublicKeySize {
 			c.sendAlert(alertIllegalParameter)
@@ -598,7 +609,7 @@ func (hs *clientHandshakeStateTLS13) establishHandshakeKeys() error {
 		}
 		ecdhePeerData = hs.serverHello.serverShare.data[:x25519PublicKeySize]
 	}
-	sharedKey, err := getSharedKey(ecdhePeerData, hs.keyShareKeys.ecdhe)
+	sharedKey, err = getSharedKey(ecdhePeerData, hs.keyShareKeys.ecdhe)
 	// [uTLS] SECTION END
 	if err != nil {
 		c.sendAlert(alertIllegalParameter)
@@ -644,6 +655,7 @@ func (hs *clientHandshakeStateTLS13) establishHandshakeKeys() error {
 		sharedKey = append(sharedKey, kyberShared...)
 	}
 	// [uTLS] SECTION END
+CCS:
 	c.curveID = hs.serverHello.serverShare.group
 
 	earlySecret := hs.earlySecret
@@ -707,7 +719,7 @@ func (hs *clientHandshakeStateTLS13) readServerParameters() error {
 	c.clientProtocol = encryptedExtensions.alpnProtocol
 
 	// [UTLS SECTION STARTS]
-	if hs.uconn != nil {
+	if hs.uconn != nil && !c.isPClient {
 		err = hs.utlsReadServerParameters(encryptedExtensions)
 		if err != nil {
 			c.sendAlert(alertUnsupportedExtension)

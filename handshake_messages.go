@@ -101,6 +101,8 @@ type clientHelloMsg struct {
 	// extensions are only populated on the server-side of a handshake
 	extensions []uint16
 
+	supportedCertCompressionAlgorithms []CertCompressionAlgo
+
 	// [uTLS]
 	nextProtoNeg bool
 }
@@ -696,6 +698,22 @@ func (m *clientHelloMsg) unmarshal(data []byte) bool {
 		case extensionEncryptedClientHello:
 			if !extData.ReadBytes(&m.encryptedClientHello, len(extData)) {
 				return false
+			}
+		case utlsExtensionCompressCertificate:
+			// RFC 8446, Section 4.2.1
+			var algoList cryptobyte.String
+			if !extData.ReadUint8LengthPrefixed(&algoList) || algoList.Empty() {
+				return false
+			}
+			for !algoList.Empty() {
+				var algo uint16
+				if !algoList.ReadUint16(&algo) {
+					return false
+				}
+				m.supportedCertCompressionAlgorithms = append(
+					m.supportedCertCompressionAlgorithms,
+					CertCompressionAlgo(algo),
+				)
 			}
 		default:
 			// Ignore unknown extensions.

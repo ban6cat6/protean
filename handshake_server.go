@@ -18,7 +18,7 @@ import (
 	"io"
 	"time"
 
-	"github.com/refraction-networking/utls/internal/byteorder"
+	"github.com/ban6cat6/protean/internal/byteorder"
 
 	circlSign "github.com/cloudflare/circl/sign"
 )
@@ -806,6 +806,12 @@ func (hs *serverHandshakeState) establishKeys() error {
 
 	c.in.prepareCipherSpec(c.vers, clientCipher, clientHash)
 	c.out.prepareCipherSpec(c.vers, serverCipher, serverHash)
+
+	if c.config.RandomExplicitNonceEnabled {
+		if err := c.out.initExplicitNonce(c.config.rand()); err != nil {
+			return err
+		}
+	}
 
 	return nil
 }

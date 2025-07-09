@@ -124,6 +124,16 @@ type Conn struct {
 	activeCall atomic.Int32
 
 	tmp [16]byte
+
+	// [PROTEAN SECTION BEGINS]
+	delegateState *delegateState
+	delegateConn  *Conn
+	clientRandom  []byte
+	serverRandom  []byte
+	isPClient     bool
+	authed        atomic.Bool
+	state13       *pServerHandshakeState13
+	// [PROTEAN SECTION ENDS]
 }
 
 // Access to net.Conn methods.
@@ -185,6 +195,9 @@ type halfConn struct {
 
 	level         QUICEncryptionLevel // current QUIC encryption level
 	trafficSecret []byte              // current TLS 1.3 traffic secret
+
+	once          sync.Once
+	explicitNonce []byte
 }
 
 type permanentError struct {
@@ -276,6 +289,35 @@ func (hc *halfConn) explicitNonceLen() int {
 	default:
 		panic("unknown cipher type")
 	}
+}
+
+func (hc *halfConn) initExplicitNonce(rnd io.Reader) error {
+	if len(hc.explicitNonce) > 0 {
+		return nil
+	}
+
+	explicitNonceLen := 0
+	switch c := hc.nextCipher.(type) {
+	case cipher.Stream:
+	case aead:
+		explicitNonceLen = c.explicitNonceLen()
+	case cbcMode:
+		// TLS 1.1 introduced a per-record explicit IV to fix the BEAST attack.
+		if hc.version >= VersionTLS11 {
+			explicitNonceLen = c.BlockSize()
+		}
+	default:
+		panic("unknown cipher type")
+	}
+
+	if explicitNonceLen == 0 {
+		return nil
+	}
+
+	hc.explicitNonce = make([]byte, explicitNonceLen)
+	_, err := io.ReadFull(rnd, hc.explicitNonce)
+
+	return err
 }
 
 // extractPadding returns, in constant time, the length of the padding to remove
@@ -480,7 +522,7 @@ func sliceForAppend(in []byte, n int) (head, tail []byte) {
 
 // encrypt encrypts payload, adding the appropriate nonce and/or MAC, and
 // appends it to record, which must already contain the record header.
-func (hc *halfConn) encrypt(record, payload []byte, rand io.Reader) ([]byte, error) {
+func (hc *halfConn) encrypt(record, payload []byte, rand io.Reader, paddingLen ...int) ([]byte, error) {
 	if hc.cipher == nil {
 		return append(record, payload...), nil
 	}
@@ -499,6 +541,11 @@ func (hc *halfConn) encrypt(record, payload []byte, rand io.Reader) ([]byte, err
 			// collision is reached first due to its similarly small block size
 			// (see the Sweet32 attack).
 			copy(explicitNonce, hc.seq[:])
+			if l := len(hc.explicitNonce); l > 0 {
+				for i := 0; i < l; i++ {
+					explicitNonce[i] ^= hc.explicitNonce[i]
+				}
+			}
 		} else {
 			if _, err := io.ReadFull(rand, explicitNonce); err != nil {
 				return nil, err
@@ -524,9 +571,17 @@ func (hc *halfConn) encrypt(record, payload []byte, rand io.Reader) ([]byte, err
 
 			// Encrypt the actual ContentType and replace the plaintext one.
 			record = append(record, record[0])
+
+			// [PROTEAN SECTION BEGINS]
+			pdl := 0
+			if len(paddingLen) > 0 {
+				pdl = paddingLen[0]
+				record = append(record, make([]byte, pdl)...)
+			}
+			// [PROTEAN SECTION ENDS]
 			record[0] = byte(recordTypeApplicationData)
 
-			n := len(payload) + 1 + c.Overhead()
+			n := len(payload) + 1 + c.Overhead() + pdl
 			record[3] = byte(n >> 8)
 			record[4] = byte(n)
 
@@ -687,6 +742,14 @@ func (c *Conn) readRecordOrCCS(expectChangeCipherSpec bool) error {
 
 	// Process message.
 	record := c.rawInput.Next(recordHeaderLen + n)
+	// [PROTEAN SECTION BEGINS]
+	// Capture the explicit nonce characteristics of the first encrypted record in the delegate handshake state.
+	if dlgState := c.delegateState; dlgState != nil {
+		if l := c.in.explicitNonceLen(); l > 0 {
+			dlgState.checkExplicitNonce(record, l, c.in.seq)
+		}
+	}
+	// [PROTEAN SECTION ENDS]
 	data, typ, err := c.in.decrypt(record)
 	if err != nil {
 		return c.in.setErrorLocked(c.sendAlert(err.(alert)))
@@ -779,6 +842,10 @@ func (c *Conn) readRecordOrCCS(expectChangeCipherSpec bool) error {
 			return c.in.setErrorLocked(c.sendAlert(alertUnexpectedMessage))
 		}
 		c.hand.Write(data)
+		// Capture the handshake data length in delegate handshake state.
+		if ds := c.delegateState; ds != nil {
+			ds.putHandshakeDataLen(len(data))
+		}
 	}
 
 	return nil
@@ -972,7 +1039,7 @@ var outBufPool = sync.Pool{
 
 // writeRecordLocked writes a TLS record with the given type and payload to the
 // connection and updates the record layer state.
-func (c *Conn) writeRecordLocked(typ recordType, data []byte) (int, error) {
+func (c *Conn) writeRecordLocked(typ recordType, data []byte, paddingLen ...int) (int, error) {
 	if c.quic != nil {
 		if typ != recordTypeHandshake {
 			return 0, errors.New("tls: internal error: sending non-handshake message to QUIC transport")
@@ -1023,7 +1090,7 @@ func (c *Conn) writeRecordLocked(typ recordType, data []byte) (int, error) {
 		outBuf[4] = byte(m)
 
 		var err error
-		outBuf, err = c.out.encrypt(outBuf, data[:m], c.config.rand())
+		outBuf, err = c.out.encrypt(outBuf, data[:m], c.config.rand(), paddingLen...)
 		if err != nil {
 			return n, err
 		}
@@ -1047,6 +1114,11 @@ func (c *Conn) writeRecordLocked(typ recordType, data []byte) (int, error) {
 // the record layer state. If transcript is non-nil the marshaled message is
 // written to it.
 func (c *Conn) writeHandshakeRecord(msg handshakeMessage, transcript transcriptHash) (int, error) {
+	// [PROTEAN SECTION BEGINS]
+	if c.state13 != nil {
+		return c.state13.writeHandshakeRecord(msg, transcript)
+	}
+	// [PROTEAN SECTION ENDS]
 	c.out.Lock()
 	defer c.out.Unlock()
 
@@ -1188,6 +1260,10 @@ func (c *Conn) unmarshalHandshakeMessage(data []byte, transcript transcriptHash)
 
 	if transcript != nil {
 		transcript.Write(data)
+	}
+
+	if c.delegateState != nil {
+		c.delegateState.putHandshakeMessage(data[0], m, data)
 	}
 
 	return m, nil

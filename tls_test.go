@@ -31,9 +31,9 @@ import (
 
 	"golang.org/x/crypto/cryptobyte"
 
-	"github.com/refraction-networking/utls/internal/fips140tls"
-	"github.com/refraction-networking/utls/internal/hpke"
-	"github.com/refraction-networking/utls/testenv"
+	"github.com/ban6cat6/protean/internal/fips140tls"
+	"github.com/ban6cat6/protean/internal/hpke"
+	"github.com/ban6cat6/protean/testenv"
 )
 
 var rsaCertPEM = `-----BEGIN CERTIFICATE-----
@@ -905,6 +905,12 @@ func TestCloneNonFuncFields(t *testing.T) {
 			f.Set(reflect.ValueOf(map[string][]byte{"a": {1}}))
 		case "ECHConfigs": // [UTLS] ECH (Encrypted Client Hello) Configs
 			f.Set(reflect.ValueOf([]ECHConfig{{Version: 1}}))
+		// [PROTEAN SECTION BEGINS]
+		case "establishHandshakeKeys", "generateClientKeyExchange":
+			continue
+		case "RandomExplicitNonceEnabled":
+			f.Set(reflect.ValueOf(true))
+		// [PROTEAN SECTION ENDS]
 		default:
 			t.Errorf("all fields must be accounted for, but saw unknown field %q", fn)
 		}

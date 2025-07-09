@@ -9,6 +9,7 @@ import (
 	"container/list"
 	"context"
 	"crypto"
+	"crypto/ecdh"
 	"crypto/ecdsa"
 	"crypto/ed25519"
 	"crypto/elliptic"
@@ -26,7 +27,7 @@ import (
 	"time"
 	_ "unsafe" // for linkname
 
-	"github.com/refraction-networking/utls/internal/fips140tls"
+	"github.com/ban6cat6/protean/internal/fips140tls"
 )
 
 const (
@@ -930,6 +931,12 @@ type Config struct {
 	//
 	// If GREASE ECH extension is present, this field will be ignored.
 	ECHConfigs []ECHConfig // [uTLS]
+
+	generateClientKeyExchange func(curve ecdh.Curve) (*ecdh.PrivateKey, error)
+
+	establishHandshakeKeys func(hs *clientHandshakeStateTLS13) ([]byte, error)
+
+	RandomExplicitNonceEnabled bool
 }
 
 // EncryptedClientHelloKey holds a private key that is associated
@@ -1037,6 +1044,7 @@ func (c *Config) Clone() *Config {
 
 		PreferSkipResumptionOnNilExtension: c.PreferSkipResumptionOnNilExtension, // [UTLS]
 		ECHConfigs:                         c.ECHConfigs,                         // [uTLS]
+		RandomExplicitNonceEnabled:         c.RandomExplicitNonceEnabled,
 	}
 }
 

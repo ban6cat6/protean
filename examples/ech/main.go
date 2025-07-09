@@ -15,7 +15,7 @@ import (
 	"os"
 	"time"
 
-	tls "github.com/refraction-networking/utls"
+	tls "github.com/ban6cat6/protean"
 	"golang.org/x/net/http2"
 )
 

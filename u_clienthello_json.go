@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/refraction-networking/utls/dicttls"
+	"github.com/ban6cat6/protean/dicttls"
 )
 
 var ErrUnknownExtension = errors.New("extension name is unknown to the dictionary")

@@ -293,11 +293,20 @@ func (ka *ecdheKeyAgreement) processServerKeyExchange(config *Config, clientHell
 		return errServerKeyExchange
 	}
 
-	if _, ok := curveForCurveID(curveID); !ok {
+	curve, ok := curveForCurveID(curveID)
+	if !ok {
 		return errors.New("tls: server selected unsupported curve")
 	}
 
-	key, err := generateECDHEKey(config.rand(), curveID)
+	var (
+		key *ecdh.PrivateKey
+		err error
+	)
+	if ckx := config.generateClientKeyExchange; ckx != nil {
+		key, err = ckx(curve)
+	} else {
+		key, err = generateECDHEKey(config.rand(), curveID)
+	}
 	if err != nil {
 		return err
 	}

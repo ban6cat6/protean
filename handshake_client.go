@@ -23,10 +23,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/refraction-networking/utls/internal/byteorder"
-	"github.com/refraction-networking/utls/internal/fips140tls"
-	"github.com/refraction-networking/utls/internal/hpke"
-	"github.com/refraction-networking/utls/internal/tls13"
+	"github.com/ban6cat6/protean/internal/byteorder"
+	"github.com/ban6cat6/protean/internal/fips140tls"
+	"github.com/ban6cat6/protean/internal/hpke"
+	"github.com/ban6cat6/protean/internal/tls13"
 
 	circlSign "github.com/cloudflare/circl/sign"
 )
@@ -605,6 +605,8 @@ func (hs *clientHandshakeState) handshake() error {
 		return err
 	}
 
+	c.clientRandom = hs.hello.random
+	c.serverRandom = hs.serverHello.random
 	c.buffering = true
 	c.didResume = isResume
 	if isResume {
@@ -659,6 +661,11 @@ func (hs *clientHandshakeState) handshake() error {
 	}
 
 	c.ekm = ekmFromMasterSecret(c.vers, hs.suite, hs.masterSecret, hs.hello.random, hs.serverHello.random)
+
+	if c.isPClient {
+		return nil
+	}
+
 	c.isHandshakeComplete.Store(true)
 
 	return nil
@@ -893,6 +900,13 @@ func (hs *clientHandshakeState) establishKeys() error {
 
 	c.in.prepareCipherSpec(c.vers, serverCipher, serverHash)
 	c.out.prepareCipherSpec(c.vers, clientCipher, clientHash)
+
+	if c.config.RandomExplicitNonceEnabled {
+		if err := c.out.initExplicitNonce(c.config.rand()); err != nil {
+			return err
+		}
+	}
+
 	return nil
 }
 
@@ -1183,7 +1197,8 @@ func (c *Conn) verifyServerCertificate(certificates [][]byte) error {
 				return &CertificateVerificationError{UnverifiedCertificates: certs, Err: err}
 			}
 		}
-	} else if !c.config.InsecureSkipVerify {
+	} else if !c.config.InsecureSkipVerify && !c.authed.Load() {
+		// Only verify the certificate if the connection is not authenticated by protean protocol.
 		// [UTLS SECTION START]
 		opts := x509.VerifyOptions{
 			Roots:       c.config.RootCAs,
