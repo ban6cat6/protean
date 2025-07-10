@@ -25,5 +25,8 @@ jobs:
       - run: go version
       - name: Build
         run: go build -v ./...
-      - name: Test
+      - name: Unit Test
         run: go test -v ./...
+      - name: Integration Test
+        working-directory: tests
+        run: go test -timeout 1m -v ./...
