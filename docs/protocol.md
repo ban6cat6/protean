@@ -235,6 +235,17 @@ For example, the client could perform "REAL" requests to the target server, and 
 After some time, the client could send a customised TLS message to the server, which is used to terminate the post-handshake messages simulation.
 However, in this solution, relaying the handshake messages is not trivial, and it will significantly increase the handshake time.
 
+## Known Limitations
+
+### Identity Hiding Forward Secrecy
+Protean has perfect forward secrecy of application data, since it implements the three-pass HMQV key exchange, which is secure against an adversary who can compromise the long-term private keys of the client and server. However, the identity hiding forward secrecy is not perfect, which a one-pass protocol. Once the adversary compromises the long-term private keys of the server, the adversary can decrypt the previous handshake messages and obtain the client fingerprint and ephemeral public key, which is used to derive the shared secret `K_0`.
+
+### Key Compromise Impersonation
+In the context of a Key Compromise Impersonation (KCI) attack, the consequences of private key compromise in the Protean protocol vary depending on the peer involved. Compromise of the client's private key does not undermine the forward secrecy of identity concealment or the forward secrecy of application-layer data. However, it enables an adversary to actively probe and confirm the presence of a Protean Server, as the server cannot differentiate between a legitimate client and a malicious actor. Conversely, if the server's private key is compromised, all identities established in prior handshakes are exposed, though the forward secrecy of application-layer data remains intact. To mitigate this risk, it is advisable to rotate the server's long-term private key periodically.
+
+### Post-Quantum Secrecy
+Protean is not, by default, post-quantum secure. The Protean protocol is not post-quantum secure; however, it is compatible with post-quantum schemes in TLS, such as X25519MLKEM. A short-term approach to achieving partial post-quantum security is through the introduction of PSK.
+
 ## Appendix
 
 [1] HOMQV: https://eprint.iacr.org/2010/638.pdf
