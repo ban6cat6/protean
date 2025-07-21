@@ -1197,7 +1197,7 @@ func (c *Conn) verifyServerCertificate(certificates [][]byte) error {
 				return &CertificateVerificationError{UnverifiedCertificates: certs, Err: err}
 			}
 		}
-	} else if !c.config.InsecureSkipVerify && !c.authed.Load() {
+	} else if !c.config.InsecureSkipVerify && !c.pauthed.Load() {
 		// Only verify the certificate if the connection is not authenticated by protean protocol.
 		// [UTLS SECTION START]
 		opts := x509.VerifyOptions{

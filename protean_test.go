@@ -1,4 +1,3 @@
-// Copyright 2025 protean Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
@@ -575,4 +574,166 @@ func TestCachedHandshakeMessage(t *testing.T) {
 	out, err := cachedSH.marshal()
 	require.Nil(t, err)
 	require.Equal(t, &data, &out)
+}
+
+func testDocking(t *testing.T, version uint16) {
+	wg := &sync.WaitGroup{}
+	defer wg.Wait()
+
+	testServerName := "example.com"
+	// Create a TLS server
+	upstreamServer, err := newTestUpstreamServer(t, testServerName, nil, false, version)
+	require.NoError(t, err)
+
+	pc := fasthttputil.NewPipeConns()
+	upstreamConn, serverConn := pc.Conn1(), pc.Conn2()
+	defer upstreamConn.Close()
+	wg.Add(1)
+	go func(conn net.Conn) {
+		defer wg.Done()
+		if !assert.NoError(t, upstreamServer.serveConn(conn)) {
+			return
+		}
+	}(serverConn)
+
+	// Server long term key pair
+	pkA, skA, err := ed25519.GenerateKey(rand.Reader)
+	require.Nil(t, err)
+	// Client long term key pair
+	pkB, skB, err := ed25519.GenerateKey(rand.Reader)
+	require.Nil(t, err)
+	fpA := GetFingerprint(pkA)
+	fpB := GetFingerprint(pkB)
+
+	testResponse := "Protean server test response"
+
+	pc = fasthttputil.NewPipeConns()
+	clientConn, serverConn := pc.Conn1(), pc.Conn2()
+	// Uncomment the following lines to test with a real TCP listener
+	//l, err := net.Listen("tcp", "127.0.0.1:10443")
+	//require.Nil(t, err)
+	//clientConn, err := net.Dial("tcp", "127.0.0.1:10443")
+	//require.Nil(t, err)
+	//serverConn, err = l.Accept()
+	require.Nil(t, err)
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		tlsConfig := &Config{
+			ServerName:         testServerName,
+			RootCAs:            upstreamServer.rootCAs(),
+			ClientSessionCache: NewLRUClientSessionCache(0),
+		}
+		pconfig := &PConfig{
+			ClientFp:           fpB,
+			ServerFp:           fpA,
+			ClientPrivateKey:   skB,
+			ServerPublicKey:    pkA,
+			DockingModeEnabled: true,
+		}
+		pconn, err := PClient(clientConn, pconfig, tlsConfig, HelloChrome_Auto)
+		if !assert.Nil(t, err) {
+			return
+		}
+		if !assert.Nil(t, pconn.Handshake()) {
+			clientConn.Close()
+			return
+		}
+		tr := http2.Transport{
+			DialTLSContext: func(ctx context.Context, network, addr string, cfg *tls.Config) (net.Conn, error) {
+				return pconn, nil
+			},
+		}
+		defer tr.CloseIdleConnections()
+		// Test traffic between client and upstream
+		req, err := http.NewRequest("GET", "https://"+testServerName, nil)
+		if !assert.Nil(t, err) {
+			return
+		}
+		resp, err := tr.RoundTrip(req)
+		if !assert.Nil(t, err) {
+			return
+		}
+		defer resp.Body.Close()
+		data, err := io.ReadAll(resp.Body)
+		if !assert.Nil(t, err) {
+			return
+		}
+		if !assert.Equal(t, http.StatusOK, resp.StatusCode) {
+			return
+		}
+		if !assert.Equal(t, upstreamServerResponse, string(data)) {
+			return
+		}
+
+		// Test protean stream between client and server
+		pstream, err := pconn.PStream()
+		if !assert.Nil(t, err) {
+			return
+		}
+		trp := http2.Transport{
+			DialTLSContext: func(ctx context.Context, network, addr string, cfg *tls.Config) (net.Conn, error) {
+				return pstream, nil
+			},
+		}
+		req, err = http.NewRequest("GET", "https://"+testServerName, nil)
+		if !assert.Nil(t, err) {
+			return
+		}
+		resp, err = trp.RoundTrip(req)
+		if !assert.Nil(t, err) {
+			return
+		}
+		defer resp.Body.Close()
+		data, err = io.ReadAll(resp.Body)
+		if !assert.Nil(t, err) {
+			return
+		}
+		if !assert.Equal(t, http.StatusOK, resp.StatusCode) {
+			return
+		}
+		if !assert.Equal(t, testResponse, string(data)) {
+			return
+		}
+	}()
+
+	cpkStore := &clientPublicKeyStore{}
+	cpkStore.Put(fpB, pkB)
+	pconn, err := PServer(serverConn, upstreamConn, &PConfig{
+		ServerPrivateKey:   skA,
+		ServerFp:           fpA,
+		ClientPublicKeys:   cpkStore,
+		DockingModeEnabled: true,
+	})
+	require.Nil(t, err)
+	err = pconn.Handshake()
+	require.Nil(t, err)
+	pstream, err := pconn.PStream()
+	require.Nil(t, err)
+	srv := http2.Server{}
+	srv.ServeConn(pstream, &http2.ServeConnOpts{
+		Handler: http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+			if !assert.Equal(t, testServerName, request.Host) {
+				return
+			}
+			if !assert.Equal(t, "GET", request.Method) {
+				return
+			}
+			if !assert.Equal(t, "/", request.URL.Path) {
+				return
+			}
+			fmt.Println("Received request:", request.Method, request.URL)
+			w.WriteHeader(http.StatusOK)
+			_, err := w.Write([]byte(testResponse))
+			if !assert.NoError(t, err) {
+				return
+			}
+		}),
+	})
+	require.Nil(t, pconn.Wait())
+}
+
+func TestDockingMode(t *testing.T) {
+	t.Run("TLSv12", func(t *testing.T) { testDocking(t, VersionTLS12) })
+	t.Run("TLSv13", func(t *testing.T) { testDocking(t, VersionTLS13) })
 }

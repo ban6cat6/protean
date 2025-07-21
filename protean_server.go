@@ -15,12 +15,17 @@ import (
 	"crypto/sha256"
 	"crypto/sha512"
 	"crypto/subtle"
+	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 
 	"github.com/ban6cat6/protean/hmqv"
-
 	"github.com/cloudflare/circl/dh/x25519"
+)
+
+var (
+	proteanDataPrefix, _ = hex.DecodeString("ee59bc4ffd6db6c1c97974454f3f4e5d") // md5sum("protean data")
 )
 
 var (
@@ -126,6 +131,7 @@ func (hs *pServerHandshakeState) handshake() (err error) {
 	if err := hs.dchs.readFinished(dc.serverFinished[:]); err != nil {
 		return err
 	}
+	dc.isHandshakeComplete.Store(true)
 
 	if dc.delegateState.randomExplicitNonceEnabled {
 		if err := c.out.initExplicitNonce(c.config.rand()); err != nil {
@@ -577,7 +583,7 @@ func (p *PConn) tryServerHandshake(ctx context.Context) (err error) {
 			clientCred: cred,
 			cfg:        p.cfg,
 		}
-		hs.c.state13 = hs
+		hs.c.pstate13 = hs
 
 		return hs.handshake()
 	}
@@ -601,4 +607,63 @@ func (p *PConn) tryServerHandshake(ctx context.Context) (err error) {
 	}
 
 	return hs.handshake()
+}
+
+func (p *PConn) docking() {
+	dc := p.delegateConn
+	p.wg.Add(2)
+	// TODO: refactor the proxy loops
+	// dc -> p
+	go func() {
+		defer p.wg.Done()
+		b := make([]byte, 1024)
+		ticketsSent := p.vers != VersionTLS13
+		for {
+			n, err := dc.Read(b)
+			if !ticketsSent {
+				if err := p.pstate13.sendSessionTickets(); err != nil {
+					break
+				}
+				ticketsSent = true
+			}
+			if n > 0 {
+				_, err := p.Write(b[:n])
+				if err != nil {
+					break
+				}
+			}
+			if err != nil {
+				break
+			}
+		}
+	}()
+
+	// p -> dc
+	go func() {
+		defer p.wg.Done()
+		b := make([]byte, 1024)
+		for {
+			n, err := p.Read(b)
+			if n > 0 {
+				_, err := dc.Write(b[:n])
+				if err != nil {
+					break
+				}
+			}
+			if err == io.EOF {
+				dc.CloseWrite()
+			}
+			if err != nil {
+				break
+			}
+		}
+	}()
+}
+
+func (p *PConn) Wait() error {
+	if !p.cfg.DockingModeEnabled {
+		return errors.New("protean: docking mode is not enabled")
+	}
+	p.wg.Wait()
+	return nil
 }
