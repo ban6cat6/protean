@@ -2902,8 +2902,8 @@ func (uconn *UConn) ApplyPreset(p *ClientHelloSpec) error {
 					} else {
 						ext.KeyShares[i].Data = append(mlkemKey.EncapsulationKey().Bytes(), ecdheKey.PublicKey().Bytes()...)
 					}
-					uconn.HandshakeState.State13.KeyShareKeys.mlkem = mlkemKey
-					uconn.HandshakeState.State13.KeyShareKeys.mlkemEcdhe = ecdheKey
+					uconn.HandshakeState.State13.KeyShareKeys.Mlkem = mlkemKey
+					uconn.HandshakeState.State13.KeyShareKeys.MlkemEcdhe = ecdheKey
 				} else {
 					ecdheKey, err := generateECDHEKey(uconn.config.rand(), curveID)
 					if err != nil {
@@ -2993,7 +2993,9 @@ func generateRandomizedSpec(
 	}
 
 	if r.FlipWeightedCoin(id.Weights.TLSVersMax_Set_VersionTLS13) {
-		p.TLSVersMin = VersionTLS10
+		// randomize min TLS version
+		minTLSVersCandidates := []uint16{VersionTLS10, VersionTLS12}
+		p.TLSVersMin = minTLSVersCandidates[r.Intn(len(minTLSVersCandidates))]
 		p.TLSVersMax = VersionTLS13
 		tls13ciphers := make([]uint16, len(defaultCipherSuitesTLS13))
 		copy(tls13ciphers, defaultCipherSuitesTLS13)
@@ -3051,6 +3053,9 @@ func generateRandomizedSpec(
 	points := SupportedPointsExtension{SupportedPoints: []byte{pointFormatUncompressed}}
 
 	curveIDs := []CurveID{}
+	if r.FlipWeightedCoin(id.Weights.CurveIDs_Append_X25519) && p.TLSVersMax == VersionTLS13 {
+		curveIDs = append(curveIDs, X25519MLKEM768)
+	}
 	if r.FlipWeightedCoin(id.Weights.CurveIDs_Append_X25519) || p.TLSVersMax == VersionTLS13 {
 		curveIDs = append(curveIDs, X25519)
 	}
@@ -3102,11 +3107,15 @@ func generateRandomizedSpec(
 		ks := KeyShareExtension{[]KeyShare{
 			{Group: X25519}, // the key for the group will be generated later
 		}}
-		if r.FlipWeightedCoin(id.Weights.FirstKeyShare_Set_CurveP256) {
-			// do not ADD second keyShare because crypto/tls does not support multiple ecdheParams
-			// TODO: add it back when they implement multiple keyShares, or implement it oursevles
-			// ks.KeyShares = append(ks.KeyShares, KeyShare{Group: CurveP256})
+		if r.FlipWeightedCoin(id.Weights.FirstKeyShare_Set_CurveP256) { // legacy setting, not used by default
 			ks.KeyShares[0].Group = CurveP256
+		} else {
+			if r.FlipWeightedCoin(id.Weights.KeyShare_Append_RandomGroups) {
+				ks.KeyShares = append(ks.KeyShares, KeyShare{Group: CurveP256})
+			}
+			if r.FlipWeightedCoin(id.Weights.KeyShare_Append_RandomGroups) {
+				ks.KeyShares = append([]KeyShare{{Group: X25519MLKEM768}}, ks.KeyShares...)
+			}
 		}
 		pskExchangeModes := PSKKeyExchangeModesExtension{[]uint8{pskModeDHE}}
 		supportedVersionsExt := SupportedVersionsExtension{

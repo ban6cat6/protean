@@ -141,22 +141,22 @@ func (p *PConn) clientHandshake(ctx context.Context) (err error) {
 	uconn.HandshakeState.Hello.Random = obfsEPK
 	uconn.HandshakeState.Hello.SessionId = ct
 	keyShareKeys := uconn.HandshakeState.State13.KeyShareKeys
-	if keyShareKeys.mlkem != nil {
+	if keyShareKeys.Mlkem != nil {
 		mlkemGenSeed := psecret.KeyShareSeed(X25519MLKEM768, epk, mlkem.SeedSize)
 		mlkemKey, err := mlkem.NewDecapsulationKey768(mlkemGenSeed)
 		if err != nil {
 			return err
 		}
-		keyShareKeys.mlkem = mlkemKey
-		if keyShareKeys.mlkemEcdhe != nil && !keyShareKeys.mlkemEcdhe.Equal(keyShareKeys.Ecdhe) {
+		keyShareKeys.Mlkem = mlkemKey
+		if keyShareKeys.MlkemEcdhe != nil && !keyShareKeys.MlkemEcdhe.Equal(keyShareKeys.Ecdhe) {
 			mlkemXGenSeed := psecret.KeyShareSeed(X25519, epk, x25519.Size)
 			mlkemXSK, err := ecdh.X25519().NewPrivateKey(mlkemXGenSeed)
 			if err != nil {
 				return err
 			}
-			keyShareKeys.mlkemEcdhe = mlkemXSK
+			keyShareKeys.MlkemEcdhe = mlkemXSK
 		} else {
-			keyShareKeys.mlkemEcdhe = xsk
+			keyShareKeys.MlkemEcdhe = xsk
 		}
 	}
 	keyShareKeys.Ecdhe = xsk
@@ -167,7 +167,7 @@ func (p *PConn) clientHandshake(ctx context.Context) (err error) {
 		case X25519:
 			keyShares[i].Data = xpk
 		case X25519MLKEM768:
-			keyShares[i].Data = append(keyShareKeys.mlkem.EncapsulationKey().Bytes(), keyShareKeys.mlkemEcdhe.PublicKey().Bytes()...)
+			keyShares[i].Data = append(keyShareKeys.Mlkem.EncapsulationKey().Bytes(), keyShareKeys.MlkemEcdhe.PublicKey().Bytes()...)
 		}
 	}
 
