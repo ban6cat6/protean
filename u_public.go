@@ -11,8 +11,6 @@ import (
 	"crypto/x509"
 	"hash"
 	"time"
-
-	"github.com/cloudflare/circl/kem"
 )
 
 // ClientHandshakeState includes both TLS 1.3-only and TLS 1.2-only states,
@@ -854,14 +852,14 @@ func (TKS TicketKeys) ToPrivate() []ticketKey {
 }
 
 type kemPrivateKey struct {
-	secretKey kem.PrivateKey
+	secretKey any
 	curveID   CurveID
 }
 
 // Deprecated: Use KeySharePrivateKeys instead. This type is no longer used.
 // Will be removed in the future.
 type KemPrivateKey struct {
-	SecretKey kem.PrivateKey
+	SecretKey any
 	CurveID   CurveID
 }
 
@@ -890,8 +888,8 @@ func (kpk *kemPrivateKey) ToPublic() *KemPrivateKey {
 type KeySharePrivateKeys struct {
 	CurveID    CurveID
 	Ecdhe      *ecdh.PrivateKey
-	mlkem      *mlkem.DecapsulationKey768
-	mlkemEcdhe *ecdh.PrivateKey
+	Mlkem      *mlkem.DecapsulationKey768
+	MlkemEcdhe *ecdh.PrivateKey
 }
 
 func (ksp *KeySharePrivateKeys) ToPrivate() *keySharePrivateKeys {
@@ -901,8 +899,8 @@ func (ksp *KeySharePrivateKeys) ToPrivate() *keySharePrivateKeys {
 	return &keySharePrivateKeys{
 		curveID:    ksp.CurveID,
 		ecdhe:      ksp.Ecdhe,
-		mlkem:      ksp.mlkem,
-		mlkemEcdhe: ksp.mlkemEcdhe,
+		mlkem:      ksp.Mlkem,
+		mlkemEcdhe: ksp.MlkemEcdhe,
 	}
 }
 
@@ -913,7 +911,7 @@ func (ksp *keySharePrivateKeys) ToPublic() *KeySharePrivateKeys {
 	return &KeySharePrivateKeys{
 		CurveID:    ksp.curveID,
 		Ecdhe:      ksp.ecdhe,
-		mlkem:      ksp.mlkem,
-		mlkemEcdhe: ksp.mlkemEcdhe,
+		Mlkem:      ksp.mlkem,
+		MlkemEcdhe: ksp.mlkemEcdhe,
 	}
 }

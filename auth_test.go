@@ -9,7 +9,6 @@ import (
 	"testing"
 
 	"github.com/ban6cat6/protean/internal/fips140tls"
-	circlPki "github.com/cloudflare/circl/pki"
 )
 
 func TestSignatureSelection(t *testing.T) {
@@ -169,7 +168,7 @@ func TestSupportedSignatureAlgorithms(t *testing.T) {
 		if sigType == 0 {
 			t.Errorf("%v: missing signature type", sigAlg)
 		}
-		if hash == 0 && sigAlg != Ed25519 && circlPki.SchemeByTLSID(uint(sigAlg)) == nil { // [UTLS] ported from cloudflare/go
+		if hash == 0 && sigAlg != Ed25519 {
 			t.Errorf("%v: missing hash", sigAlg)
 		}
 	}
