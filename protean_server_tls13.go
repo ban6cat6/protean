@@ -15,7 +15,6 @@ import (
 	"net/http"
 
 	"github.com/ban6cat6/protean/internal/tls13"
-
 	"golang.org/x/net/http2"
 )
 
@@ -99,8 +98,10 @@ func (hs *pServerHandshakeState13) handshake() (err error) {
 	}
 
 	// Probe the upstream server for post-handshake messages.
-	if err := hs.dchs.readSessionTickets(); err != nil {
-		return err
+	if !hs.cfg.DockingModeEnabled {
+		if err := hs.dchs.readSessionTickets(); err != nil {
+			return err
+		}
 	}
 
 	// Check if the upstream server requested a client certificate.
@@ -131,8 +132,10 @@ func (hs *pServerHandshakeState13) handshake() (err error) {
 		return err
 	}
 
-	if err := hs.sendSessionTickets(); err != nil {
-		return err
+	if !hs.cfg.DockingModeEnabled {
+		if err := hs.sendSessionTickets(); err != nil {
+			return err
+		}
 	}
 
 	c.isHandshakeComplete.Store(true)
@@ -267,20 +270,9 @@ func (hs *pServerHandshakeState13) sendSessionTickets() error {
 	return nil
 }
 
-func (hs *pServerHandshakeState13) writeHandshakeRecord(msg handshakeMessage, transcript transcriptHash) (int, error) {
+func (hs *pServerHandshakeState13) writeHandshakeRecordLocked(data []byte) (int, error) {
 	c := hs.c
 	dc := hs.dchs.c
-
-	c.out.Lock()
-	defer c.out.Unlock()
-
-	data, err := msg.marshal()
-	if err != nil {
-		return 0, err
-	}
-	if transcript != nil {
-		transcript.Write(data)
-	}
 
 	consumeLen := len(data)
 	// Only Certificate and CertificateVerify should be padded.
@@ -304,7 +296,7 @@ func (hs *pServerHandshakeState13) writeHandshakeRecord(msg handshakeMessage, tr
 	if !dc.delegateState.consumeHandshakeDataLen(consumeLen) {
 		hs.hand.Write(data)
 		data = hs.hand.Next(hs.hand.Len())
-		n, err := c.writeRecordLocked(recordTypeHandshake, data, hs.handshakePaddingLen)
+		n, err := c.writeRecordLocked(recordTypeHandshake, data, withPaddingLen(hs.handshakePaddingLen))
 		hs.handshakePaddingLen = 0
 		return n, err
 	}

@@ -131,8 +131,14 @@ type Conn struct {
 	clientRandom  []byte
 	serverRandom  []byte
 	isPClient     bool
-	authed        atomic.Bool
-	state13       *pServerHandshakeState13
+	pauthed       atomic.Bool
+	pstate13      *pServerHandshakeState13
+
+	// Protean data stream state
+	ponce  sync.Once
+	pcond  *sync.Cond
+	pinput bytes.Buffer
+	eof    bool
 	// [PROTEAN SECTION ENDS]
 }
 
@@ -522,7 +528,7 @@ func sliceForAppend(in []byte, n int) (head, tail []byte) {
 
 // encrypt encrypts payload, adding the appropriate nonce and/or MAC, and
 // appends it to record, which must already contain the record header.
-func (hc *halfConn) encrypt(record, payload []byte, rand io.Reader, paddingLen ...int) ([]byte, error) {
+func (hc *halfConn) encrypt(record, payload []byte, rand io.Reader, opts *writeRecordOptions) ([]byte, error) {
 	if hc.cipher == nil {
 		return append(record, payload...), nil
 	}
@@ -565,6 +571,17 @@ func (hc *halfConn) encrypt(record, payload []byte, rand io.Reader, paddingLen .
 		if len(nonce) == 0 {
 			nonce = hc.seq[:]
 		}
+		// [PROTEAN SECTION BEGINS]
+		// TODO: refine the allocation
+		var payloadPrefix []byte
+		if len(opts.payloadPrefix) > 0 {
+			payloadPrefix = make([]byte, len(opts.payloadPrefix))
+			copy(payloadPrefix, opts.payloadPrefix)
+			payload = append(payloadPrefix, payload...)
+			record[3] = byte(len(payload) >> 8)
+			record[4] = byte(len(payload))
+		}
+		// [PROTEAN SECTION ENDS]
 
 		if hc.version == VersionTLS13 {
 			record = append(record, payload...)
@@ -573,15 +590,14 @@ func (hc *halfConn) encrypt(record, payload []byte, rand io.Reader, paddingLen .
 			record = append(record, record[0])
 
 			// [PROTEAN SECTION BEGINS]
-			pdl := 0
-			if len(paddingLen) > 0 {
-				pdl = paddingLen[0]
-				record = append(record, make([]byte, pdl)...)
+			paddingLen := opts.paddingLen
+			if paddingLen > 0 {
+				record = append(record, make([]byte, paddingLen)...)
 			}
 			// [PROTEAN SECTION ENDS]
 			record[0] = byte(recordTypeApplicationData)
 
-			n := len(payload) + 1 + c.Overhead() + pdl
+			n := len(payload) + 1 + c.Overhead() + paddingLen
 			record[3] = byte(n >> 8)
 			record[4] = byte(n)
 
@@ -785,6 +801,12 @@ func (c *Conn) readRecordOrCCS(expectChangeCipherSpec bool) error {
 			return c.in.setErrorLocked(c.sendAlert(alertUnexpectedMessage))
 		}
 		if alert(data[1]) == alertCloseNotify {
+			if c.pcond != nil {
+				c.pcond.L.Lock()
+				c.eof = true
+				c.pcond.Broadcast()
+				c.pcond.L.Unlock()
+			}
 			return c.in.setErrorLocked(io.EOF)
 		}
 		if c.vers == VersionTLS13 {
@@ -832,6 +854,16 @@ func (c *Conn) readRecordOrCCS(expectChangeCipherSpec bool) error {
 		if len(data) == 0 {
 			return c.retryReadRecord(expectChangeCipherSpec)
 		}
+		// [PROTEAN SECTION BEGINS]
+		// Write the data to the protean input buffer if it is a protean data record.
+		if c.pcond != nil && bytes.HasPrefix(data, proteanDataPrefix) {
+			c.pcond.L.Lock()
+			c.pinput.Write(data[len(proteanDataPrefix):])
+			c.pcond.Broadcast()
+			c.pcond.L.Unlock()
+			return nil
+		}
+		// [PROTEAN SECTION ENDS]
 		// Note that data is owned by c.rawInput, following the Next call above,
 		// to avoid copying the plaintext. This is safe because c.rawInput is
 		// not read from or written to until c.input is drained.
@@ -1037,9 +1069,33 @@ var outBufPool = sync.Pool{
 	},
 }
 
+type writeRecordOptions struct {
+	paddingLen    int
+	payloadPrefix []byte
+}
+
+type writeRecordOpt func(*writeRecordOptions)
+
+func withPaddingLen(paddingLen int) writeRecordOpt {
+	return func(opt *writeRecordOptions) {
+		opt.paddingLen = paddingLen
+	}
+}
+
+func withPayloadDataPrefix(prefix []byte) writeRecordOpt {
+	return func(opt *writeRecordOptions) {
+		opt.payloadPrefix = prefix
+	}
+}
+
 // writeRecordLocked writes a TLS record with the given type and payload to the
 // connection and updates the record layer state.
-func (c *Conn) writeRecordLocked(typ recordType, data []byte, paddingLen ...int) (int, error) {
+func (c *Conn) writeRecordLocked(typ recordType, data []byte, opts ...writeRecordOpt) (int, error) {
+	options := &writeRecordOptions{}
+	for _, opt := range opts {
+		opt(options)
+	}
+
 	if c.quic != nil {
 		if typ != recordTypeHandshake {
 			return 0, errors.New("tls: internal error: sending non-handshake message to QUIC transport")
@@ -1090,7 +1146,7 @@ func (c *Conn) writeRecordLocked(typ recordType, data []byte, paddingLen ...int)
 		outBuf[4] = byte(m)
 
 		var err error
-		outBuf, err = c.out.encrypt(outBuf, data[:m], c.config.rand(), paddingLen...)
+		outBuf, err = c.out.encrypt(outBuf, data[:m], c.config.rand(), options)
 		if err != nil {
 			return n, err
 		}
@@ -1114,11 +1170,6 @@ func (c *Conn) writeRecordLocked(typ recordType, data []byte, paddingLen ...int)
 // the record layer state. If transcript is non-nil the marshaled message is
 // written to it.
 func (c *Conn) writeHandshakeRecord(msg handshakeMessage, transcript transcriptHash) (int, error) {
-	// [PROTEAN SECTION BEGINS]
-	if c.state13 != nil {
-		return c.state13.writeHandshakeRecord(msg, transcript)
-	}
-	// [PROTEAN SECTION ENDS]
 	c.out.Lock()
 	defer c.out.Unlock()
 
@@ -1129,6 +1180,12 @@ func (c *Conn) writeHandshakeRecord(msg handshakeMessage, transcript transcriptH
 	if transcript != nil {
 		transcript.Write(data)
 	}
+
+	// [PROTEAN SECTION BEGINS]
+	if c.pstate13 != nil {
+		return c.pstate13.writeHandshakeRecordLocked(data)
+	}
+	// [PROTEAN SECTION ENDS]
 
 	return c.writeRecordLocked(recordTypeHandshake, data)
 }
@@ -1524,6 +1581,12 @@ func (c *Conn) Close() error {
 	if c.isHandshakeComplete.Load() {
 		if err := c.closeNotify(); err != nil {
 			alertErr = fmt.Errorf("tls: failed to send closeNotify alert (but connection was closed anyway): %w", err)
+		}
+		if c.pcond != nil {
+			c.pcond.L.Lock()
+			c.eof = true
+			c.pcond.Broadcast()
+			c.pcond.L.Unlock()
 		}
 	}
 
