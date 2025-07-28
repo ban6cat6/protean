@@ -228,7 +228,7 @@ func testProteanHandshake(t *testing.T, curvePrefs []CurveID, version uint16) {
 			},
 		}
 		defer tr.CloseIdleConnections()
-		req, err := http.NewRequest("GET", "https://"+testServerName, nil)
+		req, err := http.NewRequest(http.MethodGet, "https://"+testServerName, nil)
 		if !assert.Nil(t, err) {
 			return
 		}
@@ -266,7 +266,7 @@ func testProteanHandshake(t *testing.T, curvePrefs []CurveID, version uint16) {
 			if !assert.Equal(t, testServerName, request.Host) {
 				return
 			}
-			if !assert.Equal(t, "GET", request.Method) {
+			if !assert.Equal(t, http.MethodGet, request.Method) {
 				return
 			}
 			if !assert.Equal(t, "/", request.URL.Path) {
@@ -322,7 +322,7 @@ func testActiveProbe(t *testing.T, version uint16) {
 			},
 		}
 		defer tr.CloseIdleConnections()
-		req, err := http.NewRequest("GET", "https://"+testServerName, nil)
+		req, err := http.NewRequest(http.MethodGet, "https://"+testServerName, nil)
 		if !assert.Nil(t, err) {
 			return
 		}
@@ -432,7 +432,7 @@ func testUnauthedProteanServer(t *testing.T, version uint16) {
 		},
 	}
 	defer tr.CloseIdleConnections()
-	req, err := http.NewRequest("GET", "https://"+testServerName, nil)
+	req, err := http.NewRequest(http.MethodGet, "https://"+testServerName, nil)
 	require.Nil(t, err)
 	resp, err := tr.RoundTrip(req)
 	require.Nil(t, err)
@@ -509,7 +509,7 @@ func TestUnqualifiedUpstreamServer12(t *testing.T) {
 			},
 		}
 		defer tr.CloseIdleConnections()
-		req, err := http.NewRequest("GET", "https://"+testServerName, nil)
+		req, err := http.NewRequest(http.MethodGet, "https://"+testServerName, nil)
 		if !assert.Nil(t, err) {
 			return
 		}
@@ -646,7 +646,7 @@ func testDocking(t *testing.T, version uint16) {
 		}
 		defer tr.CloseIdleConnections()
 		// Test traffic between client and upstream
-		req, err := http.NewRequest("GET", "https://"+testServerName, nil)
+		req, err := http.NewRequest(http.MethodGet, "https://"+testServerName, nil)
 		if !assert.Nil(t, err) {
 			return
 		}
@@ -676,7 +676,7 @@ func testDocking(t *testing.T, version uint16) {
 				return pstream, nil
 			},
 		}
-		req, err = http.NewRequest("GET", "https://"+testServerName, nil)
+		req, err = http.NewRequest(http.MethodGet, "https://"+testServerName, nil)
 		if !assert.Nil(t, err) {
 			return
 		}
@@ -716,7 +716,7 @@ func testDocking(t *testing.T, version uint16) {
 			if !assert.Equal(t, testServerName, request.Host) {
 				return
 			}
-			if !assert.Equal(t, "GET", request.Method) {
+			if !assert.Equal(t, http.MethodGet, request.Method) {
 				return
 			}
 			if !assert.Equal(t, "/", request.URL.Path) {
