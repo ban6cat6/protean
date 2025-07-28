@@ -80,7 +80,7 @@ func (hs *pServerHandshakeState13) handshake() (err error) {
 	defer func() {
 		if err != nil && abortWhenError {
 			c.sendAlert(alertInternalError)
-			err = fmt.Errorf("%w, cause: %w", ErrAbortHandshake, err)
+			err = fmt.Errorf("%w, cause: %w", errAbortHandshake, err)
 		}
 	}()
 

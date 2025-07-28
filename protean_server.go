@@ -29,7 +29,8 @@ var (
 )
 
 var (
-	ErrAbortHandshake = errors.New("protean: abort handshake")
+	errAbortHandshake = errors.New("protean: abort handshake")
+	errInvalidWrite   = errors.New("protean: invalid write result")
 )
 
 type delegateClientHandshakeState struct {
@@ -82,7 +83,7 @@ func (hs *pServerHandshakeState) handshake() (err error) {
 	defer func() {
 		if err != nil && abortWhenError {
 			c.sendAlert(alertInternalError)
-			err = fmt.Errorf("%w, cause: %w", ErrAbortHandshake, err)
+			err = fmt.Errorf("%w, cause: %w", errAbortHandshake, err)
 		}
 	}()
 
@@ -610,54 +611,66 @@ func (p *PConn) tryServerHandshake(ctx context.Context) (err error) {
 }
 
 func (p *PConn) docking() {
+	c := p.Conn
 	dc := p.delegateConn
 	p.wg.Add(2)
-	// TODO: refactor the proxy loops
-	// dc -> p
+	// Copy delegate connection to protean connection
 	go func() {
 		defer p.wg.Done()
-		b := make([]byte, 1024)
-		ticketsSent := p.vers != VersionTLS13
-		for {
-			n, err := dc.Read(b)
-			if !ticketsSent {
-				if err := p.pstate13.sendSessionTickets(); err != nil {
-					break
-				}
-				ticketsSent = true
-			}
-			if n > 0 {
-				_, err := p.Write(b[:n])
-				if err != nil {
-					break
-				}
-			}
-			if err != nil {
-				break
-			}
-		}
+		pcopy(c, dc)
+		p.CloseWrite()
 	}()
 
-	// p -> dc
+	// Copy protean connection to delegate connection
 	go func() {
 		defer p.wg.Done()
-		b := make([]byte, 1024)
-		for {
-			n, err := p.Read(b)
-			if n > 0 {
-				_, err := dc.Write(b[:n])
-				if err != nil {
-					break
+		pcopy(dc, c)
+		dc.CloseWrite()
+	}()
+}
+
+// pcopy copies data from src to dst until EOF is reached on src.
+// port from io.copyBuffer
+func pcopy(dst *Conn, src *Conn) (written int, err error) {
+	buf := make([]byte, 32*1024) // 32KB buffer
+	// Only in TLS 1.3 and the src is a delegate connection needs to send session tickets.
+	requireTickets := src.vers == VersionTLS13 && src.delegateState != nil && dst.pstate13 != nil
+	for {
+		nr, er := src.Read(buf)
+		if nr > 0 {
+			if requireTickets {
+				if err := dst.pstate13.sendSessionTickets(); err != nil {
+					return written, err
+				}
+				requireTickets = false
+			}
+			nw, ew := dst.Write(buf[:nr])
+			if nw < 0 || nr < nw {
+				nw = 0
+				if ew == nil {
+					ew = errInvalidWrite
 				}
 			}
-			if err == io.EOF {
-				dc.CloseWrite()
+			written += nw
+			if ew != nil {
+				err = ew
+				break
 			}
-			if err != nil {
+			if nr != nw {
+				err = io.ErrShortWrite
 				break
 			}
 		}
-	}()
+
+		if er != nil {
+			if er != io.EOF {
+				err = er
+			}
+			break
+		}
+	}
+
+	return written, err
 }
 
 func (p *PConn) Wait() error {

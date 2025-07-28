@@ -610,11 +610,11 @@ func testDocking(t *testing.T, version uint16) {
 	pc = fasthttputil.NewPipeConns()
 	clientConn, serverConn := pc.Conn1(), pc.Conn2()
 	// Uncomment the following lines to test with a real TCP listener
-	//l, err := net.Listen("tcp", "127.0.0.1:10443")
-	//require.Nil(t, err)
-	//clientConn, err := net.Dial("tcp", "127.0.0.1:10443")
-	//require.Nil(t, err)
-	//serverConn, err = l.Accept()
+	// l, err := net.Listen("tcp", "127.0.0.1:10443")
+	// require.Nil(t, err)
+	// clientConn, err := net.Dial("tcp", "127.0.0.1:10443")
+	// require.Nil(t, err)
+	// serverConn, err = l.Accept()
 	require.Nil(t, err)
 	wg.Add(1)
 	go func() {

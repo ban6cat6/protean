@@ -505,7 +505,7 @@ func (p *PConn) serverHandshake(ctx context.Context) error {
 	})
 	err := p.tryServerHandshake(ctx)
 	if err != nil {
-		if errors.Is(err, ErrAbortHandshake) {
+		if errors.Is(err, errAbortHandshake) {
 			return err
 		}
 		fmt.Printf("protean: server handshake failed, entering relay mode, cause: %v\n", err)
