@@ -7,6 +7,7 @@ package tls
 import (
 	"bytes"
 	"context"
+	"crypto/cipher"
 	"crypto/ecdh"
 	"crypto/ed25519"
 	"crypto/sha256"
@@ -121,10 +122,11 @@ type PConn struct {
 	upstreamBuf *bytes.Buffer
 
 	cfg *PConfig
+	wg  sync.WaitGroup
 }
 
 func (p *PConn) Authed() bool {
-	return p.authed.Load()
+	return p.pauthed.Load()
 }
 
 type PConfig struct {
@@ -139,6 +141,8 @@ type PConfig struct {
 	// Common Config
 	ServerFp Fingerprint
 	ClientFp Fingerprint
+
+	DockingModeEnabled bool
 
 	once sync.Once
 
@@ -383,6 +387,97 @@ func (p *PConn) Read(b []byte) (int, error) {
 	return p.Conn.Read(b)
 }
 
+type pstream struct {
+	*Conn
+}
+
+func (p *pstream) Read(b []byte) (int, error) {
+	if err := p.Handshake(); err != nil {
+		return 0, err
+	}
+
+	if len(b) == 0 {
+		return 0, nil
+	}
+
+	p.pcond.L.Lock()
+	defer p.pcond.L.Unlock()
+
+	for p.pinput.Len() == 0 {
+		if p.eof {
+			return 0, io.EOF
+		}
+		p.pcond.Wait()
+	}
+
+	return p.pinput.Read(b)
+}
+
+func (p *pstream) Write(b []byte) (int, error) {
+	// interlock with Close below
+	for {
+		x := p.activeCall.Load()
+		if x&1 != 0 {
+			return 0, net.ErrClosed
+		}
+		if p.activeCall.CompareAndSwap(x, x+2) {
+			break
+		}
+	}
+	defer p.activeCall.Add(-2)
+
+	if err := p.Handshake(); err != nil {
+		return 0, err
+	}
+
+	p.out.Lock()
+	defer p.out.Unlock()
+
+	if err := p.out.err; err != nil {
+		return 0, err
+	}
+
+	if !p.isHandshakeComplete.Load() {
+		return 0, alertInternalError
+	}
+
+	if p.closeNotifySent {
+		return 0, errShutdown
+	}
+
+	// TLS 1.0 is susceptible to a chosen-plaintext
+	// attack when using block mode ciphers due to predictable IVs.
+	// This can be prevented by splitting each Application Data
+	// record into two records, effectively randomizing the IV.
+	//
+	// https://www.openssl.org/~bodo/tls-cbc.txt
+	// https://bugzilla.mozilla.org/show_bug.cgi?id=665814
+	// https://www.imperialviolet.org/2012/01/15/beastfollowup.html
+
+	var m int
+	if len(b) > 1 && p.vers == VersionTLS10 {
+		if _, ok := p.out.cipher.(cipher.BlockMode); ok {
+			n, err := p.writeRecordLocked(recordTypeApplicationData, b[:1])
+			if err != nil {
+				return n, p.out.setErrorLocked(err)
+			}
+			m, b = 1, b[1:]
+		}
+	}
+
+	n, err := p.writeRecordLocked(recordTypeApplicationData, b, withPayloadDataPrefix(proteanDataPrefix))
+	return n + m, p.out.setErrorLocked(err)
+}
+
+func (p *PConn) PStream() (net.Conn, error) {
+	if !p.cfg.DockingModeEnabled {
+		return nil, errors.New("protean: docking mode is not enabled")
+	}
+	return &pstream{
+		Conn: p.Conn,
+	}, nil
+}
+
 func (p *PConn) Write(b []byte) (int, error) {
 	bc, ok := p.upstream.(*bufConn)
 	// In relay mode, the upstream is a bufConn
@@ -405,16 +500,27 @@ func (p *PConn) CloseWrite() error {
 }
 
 func (p *PConn) serverHandshake(ctx context.Context) error {
+	p.ponce.Do(func() {
+		p.pcond = sync.NewCond(&sync.Mutex{})
+	})
 	err := p.tryServerHandshake(ctx)
 	if err != nil {
-		if errors.Is(err, ErrAbortHandshake) {
+		if errors.Is(err, errAbortHandshake) {
 			return err
 		}
 		fmt.Printf("protean: server handshake failed, entering relay mode, cause: %v\n", err)
 		p.upstream = &bufConn{p.upstream, p.upstreamBuf}
 		p.isHandshakeComplete.Store(true)
 	} else {
-		p.authed.Store(true)
+		p.pauthed.Store(true)
+	}
+
+	if p.cfg.DockingModeEnabled {
+		// Recover the delegate connection
+		if dc, ok := p.delegateConn.conn.(*delegateConn); ok {
+			p.delegateConn.conn = dc.Conn
+		}
+		p.docking()
 	}
 
 	return nil

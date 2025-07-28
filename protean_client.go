@@ -16,6 +16,7 @@ import (
 	"errors"
 	"fmt"
 	"hash"
+	"sync"
 
 	"github.com/ban6cat6/protean/hmqv"
 	"github.com/cloudflare/circl/dh/x25519"
@@ -26,6 +27,9 @@ var (
 )
 
 func (p *PConn) clientHandshake(ctx context.Context) (err error) {
+	p.ponce.Do(func() {
+		p.pcond = sync.NewCond(&sync.Mutex{})
+	})
 	var handshakeError bool
 	defer func() {
 		if !handshakeError && err != nil {
@@ -131,7 +135,7 @@ func (p *PConn) clientHandshake(ctx context.Context) (err error) {
 		}
 
 		sharedKey := psecret.HandshakeSecret(salt, 64)
-		p.authed.Store(true)
+		p.pauthed.Store(true)
 		return sharedKey, nil
 	}
 
@@ -221,7 +225,7 @@ func (p *PConn) clientHandshake(ctx context.Context) (err error) {
 		return err
 	}
 
-	p.authed.Store(true)
+	p.pauthed.Store(true)
 	uconn.isHandshakeComplete.Store(true)
 	return nil
 }

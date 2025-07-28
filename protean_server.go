@@ -15,16 +15,22 @@ import (
 	"crypto/sha256"
 	"crypto/sha512"
 	"crypto/subtle"
+	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 
 	"github.com/ban6cat6/protean/hmqv"
-
 	"github.com/cloudflare/circl/dh/x25519"
 )
 
 var (
-	ErrAbortHandshake = errors.New("protean: abort handshake")
+	proteanDataPrefix, _ = hex.DecodeString("ee59bc4ffd6db6c1c97974454f3f4e5d") // md5sum("protean data")
+)
+
+var (
+	errAbortHandshake = errors.New("protean: abort handshake")
+	errInvalidWrite   = errors.New("protean: invalid write result")
 )
 
 type delegateClientHandshakeState struct {
@@ -77,7 +83,7 @@ func (hs *pServerHandshakeState) handshake() (err error) {
 	defer func() {
 		if err != nil && abortWhenError {
 			c.sendAlert(alertInternalError)
-			err = fmt.Errorf("%w, cause: %w", ErrAbortHandshake, err)
+			err = fmt.Errorf("%w, cause: %w", errAbortHandshake, err)
 		}
 	}()
 
@@ -126,6 +132,7 @@ func (hs *pServerHandshakeState) handshake() (err error) {
 	if err := hs.dchs.readFinished(dc.serverFinished[:]); err != nil {
 		return err
 	}
+	dc.isHandshakeComplete.Store(true)
 
 	if dc.delegateState.randomExplicitNonceEnabled {
 		if err := c.out.initExplicitNonce(c.config.rand()); err != nil {
@@ -577,7 +584,7 @@ func (p *PConn) tryServerHandshake(ctx context.Context) (err error) {
 			clientCred: cred,
 			cfg:        p.cfg,
 		}
-		hs.c.state13 = hs
+		hs.c.pstate13 = hs
 
 		return hs.handshake()
 	}
@@ -601,4 +608,75 @@ func (p *PConn) tryServerHandshake(ctx context.Context) (err error) {
 	}
 
 	return hs.handshake()
+}
+
+func (p *PConn) docking() {
+	c := p.Conn
+	dc := p.delegateConn
+	p.wg.Add(2)
+	// Copy delegate connection to protean connection
+	go func() {
+		defer p.wg.Done()
+		pcopy(c, dc)
+		p.CloseWrite()
+	}()
+
+	// Copy protean connection to delegate connection
+	go func() {
+		defer p.wg.Done()
+		pcopy(dc, c)
+		dc.CloseWrite()
+	}()
+}
+
+// pcopy copies data from src to dst until EOF is reached on src.
+// port from io.copyBuffer
+func pcopy(dst *Conn, src *Conn) (written int, err error) {
+	buf := make([]byte, 32*1024) // 32KB buffer
+	// Only in TLS 1.3 and the src is a delegate connection needs to send session tickets.
+	requireTickets := src.vers == VersionTLS13 && src.delegateState != nil && dst.pstate13 != nil
+	for {
+		nr, er := src.Read(buf)
+		if nr > 0 {
+			if requireTickets {
+				if err := dst.pstate13.sendSessionTickets(); err != nil {
+					return written, err
+				}
+				requireTickets = false
+			}
+			nw, ew := dst.Write(buf[:nr])
+			if nw < 0 || nr < nw {
+				nw = 0
+				if ew == nil {
+					ew = errInvalidWrite
+				}
+			}
+			written += nw
+			if ew != nil {
+				err = ew
+				break
+			}
+			if nr != nw {
+				err = io.ErrShortWrite
+				break
+			}
+		}
+
+		if er != nil {
+			if er != io.EOF {
+				err = er
+			}
+			break
+		}
+	}
+
+	return written, err
+}
+
+func (p *PConn) Wait() error {
+	if !p.cfg.DockingModeEnabled {
+		return errors.New("protean: docking mode is not enabled")
+	}
+	p.wg.Wait()
+	return nil
 }
