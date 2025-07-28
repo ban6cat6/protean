@@ -135,9 +135,8 @@ func TestCompatibility(t *testing.T) {
 		"tls-v1-2.badssl.com:1012",   // TLS 1.2 for sure
 		"aws.amazon.com",             // TLS 1.3 with X25519
 		"cdn.onenote.net",            // TLS 1.3 with X25519
-		"example.com",                // TLS 1.3 with X25519
+		"pages.github.com",           // TLS 1.3 with X25519MLKEM768
 		"publicassets.cdn-apple.com", // TLS 1.3 with X25519
-		"www.bing.com",               // TLS 1.3 with X25519
 		"www.google.com",             // TLS 1.3 with X25519
 		"www.gstatic.com",            // TLS 1.3 with X25519
 		"www.cloudflare.com",         // TLS 1.3 with X25519MLKEM768 and aggregated handshake packages
