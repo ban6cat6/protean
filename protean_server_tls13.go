@@ -85,7 +85,7 @@ func (hs *pServerHandshakeState13) handshake() (err error) {
 	}()
 
 	c.buffering = true
-	if err := hs.processHellos(); err != nil {
+	if err := hs.processServerHello(); err != nil {
 		return err
 	}
 
@@ -143,7 +143,7 @@ func (hs *pServerHandshakeState13) handshake() (err error) {
 	return nil
 }
 
-func (hs *pServerHandshakeState13) processHellos() error {
+func (hs *pServerHandshakeState13) processServerHello() error {
 	c := hs.c
 	if bytes.Equal(hs.hello.random, helloRetryRequestRandom) {
 		return errors.New("protean: HRR not supported")
@@ -152,6 +152,14 @@ func (hs *pServerHandshakeState13) processHellos() error {
 	if hs.hello.selectedIdentityPresent {
 		return errors.New("protean: session resumption not supported")
 	}
+
+	// Check if the cipher suite is supported.
+	suite := cipherSuiteTLS13ByID(hs.hello.cipherSuite)
+	if suite == nil {
+		return errors.New("protean: unsupported upstream cipher suite")
+	}
+	hs.suite = suite
+	hs.transcript = hs.suite.hash.New()
 
 	selectedGroup := hs.hello.serverShare.group
 	ecdhData := hs.hello.serverShare.data
@@ -197,14 +205,8 @@ func (hs *pServerHandshakeState13) processHellos() error {
 	}
 	copy(ecdhData[len(ecdhData)-x25519PublicKeySize:], sk.PublicKey().Bytes())
 
-	// Check if the cipher suite is supported.
-	suite := cipherSuiteTLS13ByID(hs.hello.cipherSuite)
-	if suite == nil {
-		return errors.New("protean: unsupported upstream cipher suite")
-	}
-	hs.suite = suite
-	hs.transcript = hs.suite.hash.New()
-	hs.sharedKey = psecret.HandshakeSecret(salt, 64)
+	hs.sharedKey = psecret.HandshakeSecret(salt, pKeyLen)
+
 	return nil
 }
 
