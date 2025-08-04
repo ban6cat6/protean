@@ -134,7 +134,7 @@ func (p *PConn) clientHandshake(ctx context.Context) (err error) {
 			return nil, errServerNotAuthed
 		}
 
-		sharedKey := psecret.HandshakeSecret(salt, 64)
+		sharedKey := psecret.HandshakeSecret(salt, pKeyLen)
 		p.pauthed.Store(true)
 		return sharedKey, nil
 	}

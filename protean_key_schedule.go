@@ -18,6 +18,9 @@ const (
 	pTicketFinishedLabel  = "protean session ticket finished"
 	pHandshakeSecretLabel = "protean handshake secret"
 	pTrafficSecretLabel   = "protean traffic secret"
+
+	// protean requires a 64-byte key for the traffic secret
+	pKeyLen = 64
 )
 
 func mkPKeyShareLabel(curveID CurveID) string {

@@ -917,8 +917,8 @@ type Config struct {
 	autoSessionTicketKeys []ticketKey
 
 	// [PROTEAN SECTION BEGINS]
-	generateClientKeyExchange func(curve ecdh.Curve) (*ecdh.PrivateKey, error)
-	establishHandshakeKeys func(hs *clientHandshakeStateTLS13) ([]byte, error)
+	generateClientKeyExchange  func(curve ecdh.Curve) (*ecdh.PrivateKey, error)
+	establishHandshakeKeys     func(hs *clientHandshakeStateTLS13) ([]byte, error)
 	RandomExplicitNonceEnabled bool
 	// [PROTEAN SECTION ENDS]
 }
@@ -1027,7 +1027,7 @@ func (c *Config) Clone() *Config {
 		autoSessionTicketKeys:               c.autoSessionTicketKeys,
 
 		PreferSkipResumptionOnNilExtension: c.PreferSkipResumptionOnNilExtension, // [UTLS]
-		RandomExplicitNonceEnabled:         c.RandomExplicitNonceEnabled, // [PROTEAN]
+		RandomExplicitNonceEnabled:         c.RandomExplicitNonceEnabled,         // [PROTEAN]
 	}
 }
 
